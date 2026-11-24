@@ -1,3 +1,4 @@
+import os
 import requests
 import time
 import math
@@ -5,17 +6,30 @@ import json
 from datetime import datetime, timezone
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-ANTHROPIC_KEY = "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"
-TG_TOKEN      = "8037434518:AAEA7PlFI9mzukcjRKdVUowEivsyMob7rBY"
-TG_CHAT       = "5348543615"
-TD_KEY        = "abd8afda1f8a43e69dea53773388524e"
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
+TG_TOKEN      = os.environ.get("TG_TOKEN", "")
+TG_CHAT       = os.environ.get("TG_CHAT", "")
+TD_KEY        = os.environ.get("TD_KEY", "")
 
 PAIRS = ["XAU/USD","EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","GBP/JPY"]
 TF_MAP = {"15M": "15min", "1H": "1h", "4H": "4h"}
 SCORE_THRESHOLD = 70
 CHECK_INTERVAL  = 900  # 15 minutes
 
-last_signals = {}  # avoid duplicates within 1 hour
+STATE_FILE = "state.json"
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def save_state(s):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(s, f)
+    except Exception as e:
+        print(f"State save error: {e}")
+last_signals = load_state()
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def dp(pair): return 2 if pair == "XAU/USD" else 3 if "JPY" in pair else 5
@@ -426,41 +440,31 @@ def analyze_pair(pair):
 
     send_signal(pair,"15M",parsed,score,get_session())
     last_signals[key]=time.time()
+    save_state(last_signals)
 
 def main():
-    print("PatternScan Bot v2.0 started - Claude AI integrated")
-    tg_send(
-        "<b>PatternScan Bot v2.0</b>\n\n"
-        "Bot pornit cu Claude AI!\n"
-        "Semnale automate 24/7\n"
-        "Score minim: 80/100\n"
-        "Claude AI validare finala\n\n"
-        "<i>PatternScan AI Terminal</i>"
-    )
+    if not (ANTHROPIC_KEY and TG_TOKEN and TG_CHAT and TD_KEY):
+        print("Missing secrets: set ANTHROPIC_KEY, TG_TOKEN, TG_CHAT, TD_KEY")
+        return
+    # Manual run from the Actions tab sends a test message, scheduled runs do not
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        tg_send("<b>PatternScan</b>\n\nScanner conectat. Semnalele vin cand score >= 70.")
+    if not is_market_open():
+        now2 = datetime.now(timezone.utc)
+        print(f"Market closed at {now2.strftime('%H:%M UTC')}. Exiting.")
+        return
 
-    while True:
-        if not is_market_open():
-            now2 = datetime.now(timezone.utc)
-            print(f"Market closed at {now2.strftime('%H:%M UTC')}. Next check in 15min...")
-            # Sleep in 1-min chunks to keep container alive
-            for _ in range(15):
-                time.sleep(60)
-                print(".", end="", flush=True)
-            print()
-            continue
+    now = datetime.now(timezone.utc)
+    print(f"Scanning {len(PAIRS)} pairs at {now.strftime('%H:%M UTC')}...")
 
-        now=datetime.now(timezone.utc)
-        print(f"\nScanning {len(PAIRS)} pairs at {now.strftime('%H:%M UTC')}...")
+    for pair in PAIRS:
+        try:
+            analyze_pair(pair)
+        except Exception as e:
+            print(f"Error {pair}: {e}")
+        time.sleep(10)
 
-        for pair in PAIRS:
-            try:
-                analyze_pair(pair)
-            except Exception as e:
-                print(f"Error {pair}: {e}")
-            time.sleep(10)
-
-        print(f"Scan complete. Next in {CHECK_INTERVAL//60}min.")
-        time.sleep(CHECK_INTERVAL)
+    print("Scan complete.")
 
 if __name__=="__main__":
     main()
